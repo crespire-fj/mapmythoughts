@@ -1,0 +1,19 @@
+{
+  "name": "Map My Thoughts",
+  "short_name": "Map Thoughts",
+  "description": "Mind maps for thinking things through, running privately on your Mac.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f4fb",
+  "theme_color": "#6246EA",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

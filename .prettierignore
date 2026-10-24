@@ -1,0 +1,9 @@
+node_modules
+server/node_modules
+dist
+package-lock.json
+server/package-lock.json
+playwright-report
+test-results
+EQAP-Map-Build-Plan.md
+README.md

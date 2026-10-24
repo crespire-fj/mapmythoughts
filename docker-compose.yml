@@ -1,0 +1,67 @@
+name: eqapmap
+
+# Everything runs on this Mac. Only the web container publishes a port, and only on 127.0.0.1.
+x-db-env: &db-env
+  POSTGRES_USER: eqapmap
+  POSTGRES_PASSWORD: eqapmap # internal network only; Postgres is never published to the host
+  POSTGRES_DB: eqapmap
+
+services:
+  db:
+    image: postgres:18.6-alpine
+    environment: *db-env
+    volumes:
+      - eqapmap-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U eqapmap -d eqapmap']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 512m
+
+  sync:
+    build:
+      context: .
+      dockerfile: docker/sync.Dockerfile
+    environment:
+      DATABASE_URL: postgres://eqapmap:eqapmap@db:5432/eqapmap
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - '127.0.0.1:8080:80'
+    depends_on:
+      - sync
+    restart: unless-stopped
+    mem_limit: 128m
+
+  # Takes a compressed SQL dump into ~/EqapMap-backups (outside Docker) when the newest one is
+  # older than a day, and keeps 14 days of dumps.
+  backup:
+    image: postgres:18.6-alpine
+    environment:
+      <<: *db-env
+      PGHOST: db
+      PGPASSWORD: eqapmap
+      KEEP_DAYS: '14'
+    entrypoint: ['/bin/sh', '/backup-loop.sh']
+    volumes:
+      - ./scripts/backup-loop.sh:/backup-loop.sh:ro
+      - ${HOME}/EqapMap-backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 128m
+
+volumes:
+  eqapmap-pgdata:
+    name: eqapmap-pgdata

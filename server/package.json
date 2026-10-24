@@ -1,0 +1,22 @@
+{
+  "name": "map-my-thoughts-server",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hocuspocus/extension-database": "4.7.1",
+    "@hocuspocus/server": "4.7.1",
+    "pg": "8.23.1",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "typescript": "6.0.3"
+  }
+}
