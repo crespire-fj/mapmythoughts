@@ -8,7 +8,7 @@ export default defineConfig({
   reporter: [['list']],
   globalSetup: './e2e/global-setup.ts',
   use: {
-    baseURL: process.env.EQAPMAP_URL ?? 'http://localhost:8080',
+    baseURL: process.env.MMT_URL ?? 'http://localhost:8080',
     viewport: { width: 1280, height: 800 },
     trace: 'retain-on-failure',
   },

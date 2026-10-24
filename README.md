@@ -71,7 +71,7 @@ Desktop when you sign in_.
 | Start it again         | `docker compose up -d`                                                    |
 | Update to the latest   | `git pull` then `docker compose up -d --build`                            |
 | See what it's doing    | `docker compose logs -f`                                                  |
-| Use a different port   | change `127.0.0.1:8080:80` in `docker-compose.yml`, then start it again   |
+| Use a different port   | copy `.env.example` to `.env`, set `MMT_PORT`, then start it again |
 
 If you have Node.js installed, `npm run up`, `npm run down` and `npm run logs` do the same things.
 
@@ -80,23 +80,22 @@ the same way. Windows hasn't been tested; running it inside WSL 2 is the most li
 
 ## Your data
 
-- **Where it lives:** a Postgres database in the Docker volume `eqapmap-pgdata`. It survives
+- **Where it lives:** a Postgres database in the Docker volume `mapmythoughts-pgdata`. It survives
   restarts, rebuilds, updates and `docker compose down`.
 - **Daily backups:** while the app is running, a compressed copy of the database is saved to the
-  `EqapMap-backups` folder in your home folder once a day. Copies older than 14 days are deleted.
+  `MapMyThoughts-backups` folder in your home folder once a day. Copies older than 14 days are
+  deleted. To use another folder (one that's synced to the cloud, say), set `MMT_BACKUP_DIR` in
+  `.env` (see `.env.example`).
 - **Back up now:** `./scripts/backup.sh` (or `npm run backup`).
-- **Restore:** `./scripts/restore.sh ~/EqapMap-backups/<file>.sql.gz` replaces every map with the
-  backup's contents. It asks you to confirm first.
+- **Restore:** `./scripts/restore.sh ~/MapMyThoughts-backups/<file>.sql.gz` replaces every map with
+  the backup's contents. It asks you to confirm first.
 - **Per-map history:** open _History_ in a map to save a named version or restore an earlier one.
   A version is also kept automatically every 30 minutes while you edit.
 
 > [!WARNING]
 > Docker Desktop's **Troubleshoot → Clean / Purge data** and **Reset to factory defaults** delete
-> all volumes, including your maps. Only the backups in `~/EqapMap-backups` would survive. Consider
-> keeping that folder somewhere that's also backed up or synced.
-
-The names `eqapmap` and `EqapMap-backups` come from the project's original name (EQAP Map). They
-are kept so existing installations keep their maps.
+> all volumes, including your maps. Only the backups in `~/MapMyThoughts-backups` would survive.
+> Consider keeping that folder somewhere that's also backed up or synced.
 
 ## Sharing with other people
 
@@ -112,8 +111,8 @@ import.
 - The app listens on `127.0.0.1` only, so other computers on your network can't reach it.
 - There are **no accounts and no sign-in**: anyone who can use your computer can open your maps.
   Don't change the port mapping to expose it to a network or the internet.
-- The database password in `docker-compose.yml` is only used inside Docker's private network;
-  the database is never published to your computer or network.
+- The database password is only used inside Docker's private network; the database is never
+  published to your computer or network.
 - Uploaded map thumbnails are checked on the server and served so that they can't run scripts.
 - Nothing is collected or sent anywhere. There's no telemetry.
 
@@ -160,7 +159,8 @@ Changes to the server (`server/src`) need `npm run up` to rebuild the `sync` con
 | `npm run e2e`       | Browser tests (Playwright) against the running app; run `npm run up` first |
 | `npm run format`    | Prettier                                                                   |
 
-The browser tests create and delete their own maps; they don't touch yours. The first time, install
+The browser tests create and delete their own maps; they don't touch yours. To test a copy on
+another port, set `MMT_URL` (for example `MMT_URL=http://localhost:8090 npm run e2e`). The first time, install
 the test browser with `npx playwright install chromium`.
 
 ### How it works

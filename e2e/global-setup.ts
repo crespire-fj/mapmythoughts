@@ -1,5 +1,5 @@
 export default async function globalSetup() {
-  const url = process.env.EQAPMAP_URL ?? 'http://localhost:8080';
+  const url = process.env.MMT_URL ?? 'http://localhost:8080';
   try {
     const response = await fetch(`${url}/api/health`);
     if (!response.ok) throw new Error(String(response.status));

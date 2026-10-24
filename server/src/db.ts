@@ -1,7 +1,9 @@
 import pg from 'pg';
 
 export const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL ?? 'postgres://eqapmap:eqapmap@localhost:5432/eqapmap',
+  connectionString:
+    process.env.DATABASE_URL ??
+    'postgres://mapmythoughts:mapmythoughts@localhost:5432/mapmythoughts',
   max: 5,
 });
 
