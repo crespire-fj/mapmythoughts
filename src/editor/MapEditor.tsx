@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type * as Y from 'yjs';
 import {
   addChild,
+  buildMapFromBranch,
+  countOccurrences,
   addLink,
   addSibling,
   deleteLink,
@@ -12,7 +14,9 @@ import {
   moveAmongSiblings,
   moveSubtree,
   outdentNode,
+  replaceBranchWithLink,
   replaceContent,
+  replaceText,
   revealNode,
   serializeSubtrees,
   setCollapsed,
@@ -26,7 +30,7 @@ import {
   type MoveTarget,
   type OutlineNode,
 } from '../commands/commands';
-import { attachBox, connectorPath, crossLink, edgePoint } from '../connectors/connectors';
+import { crossLink, edgePoint, treeConnector } from '../connectors/connectors';
 import { FILE_EXTENSION, buildMapFile } from '../export/mapfile';
 import { buildSvg, download, safeFilename, svgToPng } from '../export/image';
 import { exportMarkdown } from '../export/markdown';
@@ -39,6 +43,7 @@ import {
   intersects,
   layoutBounds,
   type Box,
+  type LayoutNode,
   type Phantom,
   type Size,
 } from '../layout/layout';
@@ -65,9 +70,11 @@ import { focusSnapshot } from './focus';
 import { Minimap } from './Minimap';
 import { NodeView, type EditMode } from './NodeView';
 import { DetailsPanel } from './panels/DetailsPanel';
+import { OpenItemsPanel, openItems } from './panels/OpenItemsPanel';
 import { OutlinePanel } from './panels/OutlinePanel';
 import { VersionsPanel } from './panels/VersionsPanel';
 import { findMatches } from './search';
+import { internalLink } from './url';
 import { SearchBar } from './SearchBar';
 import { ShortcutHelp } from './ShortcutHelp';
 import { StyleBar } from './StyleBar';
@@ -81,7 +88,7 @@ interface DragState {
   currentWorld: { x: number; y: number };
   active: boolean;
   /** visible boxes of the dragged subtree when the drag started, for the ghost preview */
-  ghost: Map<string, { box: Box; parentId: string; side: Side; depth: number }>;
+  ghost: Map<string, LayoutNode>;
   target: MoveTarget | null;
   phantom: Phantom | null;
 }
@@ -131,9 +138,12 @@ function useMapCollection(mapId: string): Collection | null {
 
 export function MapEditorPage({
   mapId,
+  nodeId,
   onExit,
 }: {
   mapId: string;
+  /** a node to jump to, from a #/map/<id>/node/<nodeId> link */
+  nodeId?: string | null;
   onExit: (collectionId?: string | null) => void;
 }) {
   const result = useMapDocument(mapId);
@@ -160,6 +170,7 @@ export function MapEditorPage({
       snapshot={result.snapshot}
       status={result.status}
       collection={collection}
+      targetNodeId={nodeId ?? null}
       onExit={onExit}
     />
   );
@@ -172,6 +183,7 @@ interface EditorProps {
   snapshot: MapSnapshot;
   status: SaveStatus;
   collection: Collection | null;
+  targetNodeId: string | null;
   onExit: (collectionId?: string | null) => void;
 }
 
@@ -182,6 +194,7 @@ function MapEditor({
   snapshot: fullSnapshot,
   status,
   collection,
+  targetNodeId,
   onExit,
 }: EditorProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -224,9 +237,23 @@ function MapEditor({
   const [panels, setPanels] = useState<Set<SidePanel>>(
     () => new Set(readPref<SidePanel[]>('eqapmap:panels', [])),
   );
-  const [search, setSearch] = useState<{ query: string; index: number } | null>(null);
+  const [search, setSearch] = useState<{
+    query: string;
+    index: number;
+    replacing?: boolean;
+    replacement?: string;
+  } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  /** Other maps, for linking to them; loaded when the details panel opens. */
+  const [maps, setMaps] = useState<{ id: string; title: string }[]>([]);
   const [minimapVisible, setMinimapVisible] = useState(() => readPref('eqapmap:minimap', true));
+  const [notesOnMap, setNotesOnMap] = useState(() => readPref('eqapmap:notes-on-map', false));
+  /** The note shown while the pointer is over a node's note badge. */
+  const [notePreview, setNotePreview] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const onNoteHover = useCallback(
+    (id: string, rect: DOMRect | null) => setNotePreview(rect ? { id, rect } : null),
+    [],
+  );
   const toast = useToast();
   /** Last box object per node; reused when unchanged so memoised nodes skip re-rendering. */
   const boxCache = useRef(new Map<string, Box>());
@@ -246,7 +273,7 @@ function MapEditor({
   // Floating panels cover part of the canvas; reveal and fit keep nodes clear of them.
   const insets: Insets = {
     left: panels.has('outline') ? 324 : 0,
-    right: panels.has('details') || panels.has('history') ? 364 : 0,
+    right: panels.has('details') || panels.has('history') || panels.has('open') ? 364 : 0,
   };
 
   // ----- layout -------------------------------------------------------------------------------
@@ -287,6 +314,10 @@ function MapEditor({
     [snapshot, search?.query],
   );
   const currentMatch = search && matches.length ? matches[search.index % matches.length] : null;
+  const occurrences = useMemo(
+    () => (search?.replacing && search.query ? countOccurrences(snapshot, search.query) : 0),
+    [snapshot, search?.replacing, search?.query],
+  );
   const matchSet = useMemo(() => new Set(matches), [matches]);
 
   // ----- latest values for event handlers -----------------------------------------------------
@@ -545,9 +576,9 @@ function MapEditor({
       const next = new Set(current);
       const open = force ?? !next.has(panel);
       if (open) {
-        // details and history share the right-hand side
-        if (panel === 'details') next.delete('history');
-        if (panel === 'history') next.delete('details');
+        // details, history and open items share the right-hand side
+        if (panel !== 'outline')
+          for (const right of ['details', 'history', 'open'] as const) next.delete(right);
         next.add(panel);
       } else {
         next.delete(panel);
@@ -639,6 +670,48 @@ function MapEditor({
           toast.show({ text: 'Those two nodes are already linked.' }, 2500);
         }
       },
+      /** Moves the selected branch into a new map (same collection) and links to it. */
+      async moveToNewMap() {
+        const id = state.current.primary;
+        if (!id || id === ROOT_ID || state.current.selection.length !== 1) return;
+        const real = toReal(id);
+        const full = state.current.fullSnapshot;
+        if (!(full.children.get(real)?.length ?? 0)) {
+          toast.show({ text: 'Only a node with children can become its own map.' });
+          return;
+        }
+        const title = full.nodes.get(real)?.text.replace(/\s+/g, ' ') || 'Untitled map';
+        const { orientation: o, connector, theme: t } = full.settings;
+        let newId: string;
+        try {
+          newId = await api.create(
+            buildMapFromBranch(full, real, { orientation: o, connector, theme: t }),
+            collection?.id ?? null,
+          );
+        } catch {
+          toast.show({ text: 'Could not create the new map.' });
+          return;
+        }
+        run(() => replaceBranchWithLink(doc, real, internalLink(newId)));
+        select(id, true);
+        toast.show(
+          {
+            text: `Moved to the new map “${title}”. Undo puts the branch back here.`,
+            action: { label: 'Open it', run: () => (window.location.hash = internalLink(newId)) },
+          },
+          6000,
+        );
+      },
+      toggleSteps() {
+        const { selection: sel, snapshot: s } = state.current;
+        const ids = nonRoot(sel);
+        if (!ids.length) return;
+        const on = ids.some((id) => !s.nodes.get(id)?.steps);
+        run(() => setStyle(doc, ids, { steps: on }));
+        if (on && ids.every((id) => !(s.children.get(id)?.length ?? 0))) {
+          toast.show({ text: 'Steps layout is on: children you add will flow downward.' }, 3000);
+        }
+      },
       toggleFocus() {
         const { primary: id } = state.current;
         if (focusRef.current && (!id || id === ROOT_ID)) {
@@ -664,10 +737,11 @@ function MapEditor({
       restructure(direction: Direction) {
         const { snapshot: s, layout: l, primary: id } = state.current;
         if (!id || id === ROOT_ID) return;
+        const laid = l.nodes.get(id);
         const move = structuralMove(
           direction,
-          l.orientation,
-          l.nodes.get(id)?.side ?? s.nodes.get(id)!.side,
+          laid?.flow ?? l.orientation,
+          laid?.flowSide ?? s.nodes.get(id)!.side,
         );
         const done = run(() =>
           move === 'earlier'
@@ -729,7 +803,7 @@ function MapEditor({
         undo.redo();
       },
     }),
-    [doc, undo, run, startEdit, stopEdit, select, deleteMap, toast, toReal, toView],
+    [doc, undo, run, startEdit, stopEdit, select, deleteMap, toast, toReal, toView, collection?.id],
   );
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
@@ -758,15 +832,90 @@ function MapEditor({
     select(currentMatch, true);
   }, [doc, currentMatch, select]);
 
-  const openSearch = useCallback(() => {
-    stopEdit();
-    setSearch((s) => s ?? { query: '', index: 0 });
-  }, [stopEdit]);
+  const openSearch = useCallback(
+    (replacing = false) => {
+      stopEdit();
+      setSearch((s) => ({ query: '', index: 0, ...s, ...(replacing ? { replacing } : {}) }));
+    },
+    [stopEdit],
+  );
+
+  /** Replace in the current match, or (all) everywhere in view: the whole map, or the focus. */
+  const replaceMatches = (all: boolean) => {
+    if (!search?.query) return;
+    const replacement = search.replacement ?? '';
+    const scope = all
+      ? focus
+        ? [...snapshot.nodes.keys(), focus]
+        : undefined
+      : currentMatch
+        ? [currentMatch]
+        : [];
+    const count = run(() => replaceText(doc, search.query, replacement, scope));
+    if (all) {
+      toast.show({
+        text: count
+          ? `Replaced ${count} ${count === 1 ? 'time' : 'times'}. Undo puts them back.`
+          : 'Nothing to replace.',
+      });
+    } else if (!count) {
+      // the node matched the words but not the exact phrase: move on
+      setSearch((x) => x && { ...x, index: x.index + 1 });
+    }
+  };
 
   const closeSearch = useCallback(() => {
     setSearch(null);
     focusCanvas();
   }, [focusCanvas]);
+
+  useEffect(() => {
+    if (!panels.has('details')) return;
+    let cancelled = false;
+    api
+      .list()
+      .then((list) => {
+        if (!cancelled) setMaps(list.map((m) => ({ id: m.id, title: m.title })));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [panels]);
+
+  const copyLink = useCallback(
+    async (id: string) => {
+      const real = toReal(id);
+      const url = `${window.location.origin}/${internalLink(mapId, real === ROOT_ID ? null : real)}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.show({ text: 'Link copied. Paste it into a node’s link, in any map.' }, 3500);
+      } catch {
+        toast.show({ text: `Copy this link: ${url}` }, 8000);
+      }
+    },
+    [mapId, toReal, toast],
+  );
+
+  // ----- links to a node ----------------------------------------------------------------------
+  // A #/map/<id>/node/<nodeId> link opens the map with that node selected and in view. The address
+  // then goes back to #/map/<id>, so following the same link again works.
+  useEffect(() => {
+    if (!targetNodeId || status === 'loading') return;
+    window.location.replace(internalLink(mapId));
+    if (!fullSnapshot.nodes.has(targetNodeId)) {
+      toast.show({ text: 'That node is no longer in this map.' });
+      return;
+    }
+    if (focusRef.current) {
+      setFocusId(null);
+      fitPending.current = false;
+    }
+    revealNode(doc, targetNodeId, false);
+    select(targetNodeId, true);
+    // Only when a new link arrives or the map finishes loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetNodeId, status === 'loading']);
 
   // ----- presentation -------------------------------------------------------------------------
   /** Overview first, then each main branch (right side, then left). */
@@ -898,6 +1047,7 @@ function MapEditor({
         },
         { key: 'y', mod: true, whileEditing: true, run: () => actionsRef.current.redo() },
         { key: 'f', mod: true, whileEditing: true, run: () => openSearch() },
+        { code: 'KeyF', mod: true, alt: true, whileEditing: true, run: () => openSearch(true) },
         { key: 'a', mod: true, run: () => actionsRef.current.selectAll() },
         { key: 'i', mod: true, whileEditing: true, run: () => togglePanel('details') },
         { key: '=', mod: true, run: () => zoomBy(1.2) },
@@ -941,6 +1091,7 @@ function MapEditor({
         { key: '.', mod: true, run: () => a().toggleCollapse() },
         { key: 'd', mod: true, run: () => a().duplicate() },
         { code: 'KeyL', alt: true, run: () => a().startLink() },
+        { code: 'KeyS', alt: true, run: () => a().toggleSteps() },
         { key: 'printable', run: (event) => startEdit(current(), 'end', event.key) },
       ],
     };
@@ -1149,13 +1300,7 @@ function MapEditor({
       const ghost: DragState['ghost'] = new Map();
       for (const id of [current.nodeId, ...descendantsOf(s, current.nodeId)]) {
         const node = l.nodes.get(id);
-        if (node)
-          ghost.set(id, {
-            box: node.box,
-            parentId: node.parentId,
-            side: node.side,
-            depth: node.depth,
-          });
+        if (node) ghost.set(id, node);
       }
       if (state.current.editing) stopEdit();
       canvasRef.current!.setPointerCapture(event.pointerId);
@@ -1278,7 +1423,7 @@ function MapEditor({
         download(new Blob([exportMarkdown(snapshot)], { type: 'text/markdown' }), `${name}.md`);
         return;
       }
-      const svg = await buildSvg(snapshot, baseLayout);
+      const svg = await buildSvg(snapshot, baseLayout, { notes: notesOnMap });
       if (format === 'svg') download(new Blob([svg], { type: 'image/svg+xml' }), `${name}.svg`);
       else if (format === 'png') download(await svgToPng(svg), `${name}.png`);
       else if (format === 'pdf') printMap(snapshot, svg);
@@ -1381,12 +1526,12 @@ function MapEditor({
           key={node.id}
           className={`${isPlaceholder ? 'connector connector--placeholder' : 'connector'}${presented && !presented.has(node.id) ? ' is-dimmed' : ''}`}
           style={look ? { stroke: look.line, strokeWidth: look.lineWidth } : undefined}
-          d={connectorPath(
+          d={treeConnector(
             snapshot.settings.connector,
-            attachBox(parent, snapshot.nodes.get(node.parentId)?.shape, layout.orientation),
-            attachBox(node.box, data?.shape, layout.orientation),
-            node.side,
-            layout.orientation,
+            parent,
+            snapshot.nodes.get(node.parentId)?.shape,
+            node,
+            data?.shape,
           )}
         />,
       );
@@ -1405,12 +1550,12 @@ function MapEditor({
             key={`ghost-${id}`}
             className="connector connector--ghost"
             style={look ? { stroke: look.line, strokeWidth: look.lineWidth } : undefined}
-            d={connectorPath(
+            d={treeConnector(
               snapshot.settings.connector,
-              attachBox(shift(parent.box), snapshot.nodes.get(ghost.parentId)?.shape, orientation),
-              attachBox(shift(ghost.box), snapshot.nodes.get(id)?.shape, orientation),
-              ghost.side,
-              orientation,
+              shift(parent.box),
+              snapshot.nodes.get(ghost.parentId)?.shape,
+              { ...ghost, box: shift(ghost.box) },
+              snapshot.nodes.get(id)?.shape,
             )}
           />,
         );
@@ -1449,12 +1594,17 @@ function MapEditor({
         {content}
       </button>,
     );
-  /** A point `distance` screen pixels beyond the edge of `box` facing `side`. */
-  const beyond = (box: Box, side: Side, distance: number) => {
-    const edge = edgePoint(box, side, orientation);
+  /** A point `distance` screen pixels beyond the edge of `box` facing `side` along `flow`. */
+  const beyond = (box: Box, side: Side, distance: number, flow = orientation) => {
+    const edge = edgePoint(box, side, flow);
     const d = ((side === 'right' ? 1 : -1) * distance) / scale;
-    return orientation === 'vertical' ? { x: edge.x, y: edge.y + d } : { x: edge.x + d, y: edge.y };
+    return flow === 'vertical' ? { x: edge.x, y: edge.y + d } : { x: edge.x + d, y: edge.y };
   };
+  /** Where a node's children hang: its own side, or below/after it inside a steps branch. */
+  const childEdge = (node: LayoutNode): { side: Side; flow: typeof orientation } =>
+    node.childFlow === orientation
+      ? { side: node.side, flow: orientation }
+      : { side: 'right', flow: node.childFlow };
 
   if (!drag?.active && presenting === null && !linking) {
     for (const node of layout.nodes.values()) {
@@ -1462,9 +1612,10 @@ function MapEditor({
       if (!kids || node.id === PLACEHOLDER_ID) continue;
       const data = snapshot.nodes.get(node.id);
       const collapsed = !!data?.collapsed;
+      const edge = childEdge(node);
       control(
         `collapse-${node.id}`,
-        beyond(node.box, node.side, 12),
+        beyond(node.box, edge.side, 12, edge.flow),
         collapsed ? 'Expand branch' : 'Collapse branch',
         () => {
           select(node.id);
@@ -1495,14 +1646,38 @@ function MapEditor({
       } else if (box) {
         const node = layout.nodes.get(primary)!;
         const hasKids = (snapshot.children.get(primary)?.length ?? 0) > 0;
-        control('add-child', beyond(box, node.side, hasKids ? 46 : 24), 'Add child (Tab)', () =>
-          actions.addChild(primary),
+        const edge = childEdge(node);
+        /** A point `along` px past the edge facing the children, `across` px off centre. */
+        const band = (along: number, across: number) =>
+          node.childFlow === 'vertical'
+            ? { x: box.x + box.width / 2 + across / scale, y: box.y + box.height + along / scale }
+            : { x: box.x + box.width + along / scale, y: box.y + box.height / 2 + across / scale };
+        /** Past the edge where the next sibling goes, in the way the node hangs. */
+        const nextSibling = (distance: number) =>
+          node.flow === 'vertical'
+            ? { x: box.x + box.width + distance / scale, y: box.y + box.height / 2 }
+            : { x: box.x + box.width / 2, y: box.y + box.height + distance / scale };
+        const inSteps = node.childFlow !== orientation;
+        // Inside a steps branch the next step is only a short gap away, so the buttons share
+        // that gap instead of sitting on top of the first step.
+        control(
+          'add-child',
+          inSteps
+            ? band(hasKids ? 12 : 24, hasKids ? 26 : 0)
+            : beyond(box, edge.side, hasKids ? 46 : 24, edge.flow),
+          'Add child (Tab)',
+          () => actions.addChild(primary),
         );
-        const sibling =
-          orientation === 'vertical'
-            ? { x: box.x + box.width + 24 / scale, y: box.y + box.height / 2 }
-            : { x: box.x + box.width / 2, y: box.y + box.height + 24 / scale };
-        control('add-sibling', sibling, 'Add sibling (Enter)', () => actions.addSibling(primary));
+        control(
+          'add-sibling',
+          !inSteps
+            ? nextSibling(24)
+            : node.flow === node.childFlow
+              ? nextSibling(14)
+              : band(12, -26),
+          'Add sibling (Enter)',
+          () => actions.addSibling(primary),
+        );
       }
     }
   }
@@ -1551,6 +1726,7 @@ function MapEditor({
         glow={isRoot ? `${rootLook.to}55` : undefined}
         marker={data?.marker ?? null}
         hasNote={!!data?.note}
+        visibleNote={notesOnMap && !ghost ? (data?.note ?? '') : ''}
         link={data?.link ?? ''}
         box={box}
         depth={depth}
@@ -1568,6 +1744,7 @@ function MapEditor({
         onTextChange={onTextChange}
         onEditEnd={onEditEnd}
         onOpenDetails={onOpenDetails}
+        onNoteHover={onNoteHover}
       />
     );
   };
@@ -1665,6 +1842,7 @@ function MapEditor({
   }
 
   const placeholder = layout.nodes.get(PLACEHOLDER_ID);
+  const openCount = useMemo(() => openItems(fullSnapshot, mapId).length, [fullSnapshot, mapId]);
   const selectedNodes = nonRoot(selection)
     .map((id) => snapshot.nodes.get(id))
     .filter((n) => n !== undefined);
@@ -1698,12 +1876,20 @@ function MapEditor({
         canUndo={undo.canUndo()}
         canRedo={undo.canRedo()}
         panels={panels}
+        openCount={openCount}
+        notesOnMap={notesOnMap}
+        onNotesOnMap={() =>
+          setNotesOnMap((v) => {
+            writePref('eqapmap:notes-on-map', !v);
+            return !v;
+          })
+        }
         colorPreference={colorPreference}
         collection={collection}
         onBack={() => onExit(collection?.id)}
         onUndo={() => actions.undo()}
         onRedo={() => actions.redo()}
-        onSearch={openSearch}
+        onSearch={() => openSearch()}
         onSettings={(patch: Partial<MapSettings>) => {
           run(() => setSettings(doc, patch));
           if (patch.orientation) requestAnimationFrame(() => fitView());
@@ -1880,7 +2066,7 @@ function MapEditor({
             query={search.query}
             count={matches.length}
             index={matches.length ? search.index % matches.length : 0}
-            onQuery={(query) => setSearch({ query, index: 0 })}
+            onQuery={(query) => setSearch((x) => ({ ...x, query, index: 0 }))}
             onStep={(delta) =>
               setSearch(
                 (s) =>
@@ -1892,6 +2078,13 @@ function MapEditor({
               )
             }
             onClose={closeSearch}
+            replacing={!!search.replacing}
+            replacement={search.replacement ?? ''}
+            occurrences={occurrences}
+            onToggleReplace={() => setSearch((x) => x && { ...x, replacing: !x.replacing })}
+            onReplacement={(replacement) => setSearch((x) => x && { ...x, replacement })}
+            onReplace={() => replaceMatches(false)}
+            onReplaceAll={() => replaceMatches(true)}
           />
         )}
 
@@ -1922,6 +2115,9 @@ function MapEditor({
             onMarker={(marker) => run(() => setStyle(doc, primary, { marker }))}
             onEditSession={() => undo.stopCapturing()}
             onClose={() => togglePanel('details', false)}
+            mapId={mapId}
+            maps={maps}
+            onCopyLink={() => void copyLink(primary)}
           />
         )}
         {panels.has('details') && !primary && (
@@ -1931,6 +2127,19 @@ function MapEditor({
             </header>
             <p className="panel__hint">Select a node to add a note, a link or a marker.</p>
           </aside>
+        )}
+        {panels.has('open') && (
+          <OpenItemsPanel
+            mapId={mapId}
+            snapshot={fullSnapshot}
+            collection={collection}
+            onSelect={(id) => {
+              if (focus && !snapshot.nodes.has(id)) setFocusId(null);
+              revealNode(doc, id, false);
+              select(id, true);
+            }}
+            onClose={() => togglePanel('open', false)}
+          />
         )}
         {panels.has('history') && (
           <VersionsPanel
@@ -1950,6 +2159,15 @@ function MapEditor({
             onDetails={() => togglePanel('details', true)}
             onLink={() => actions.startLink()}
             onFocus={() => actions.toggleFocus()}
+            onSteps={() => actions.toggleSteps()}
+            onMoveToMap={() => void actions.moveToNewMap()}
+            canMoveToMap={
+              selection.length === 1 &&
+              (fullSnapshot.children.get(toReal(primary ?? ROOT_ID))?.length ?? 0) > 0
+            }
+            insideSteps={selectedNodes.every((n) =>
+              ancestorsOf(snapshot, n.id).some((a) => snapshot.nodes.get(a)?.steps),
+            )}
             canLinkPair={selection.length === 2}
           />
         )}
@@ -1973,6 +2191,18 @@ function MapEditor({
         />
 
         {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+        {notePreview && fullSnapshot.nodes.get(notePreview.id)?.note && !notesOnMap && (
+          <div
+            className="note-preview"
+            role="tooltip"
+            style={{
+              left: Math.min(notePreview.rect.left, window.innerWidth - 376),
+              top: notePreview.rect.bottom + 8,
+            }}
+          >
+            {fullSnapshot.nodes.get(notePreview.id)!.note}
+          </div>
+        )}
       </div>
       {toast.view}
       <div className="sr-only" aria-live="polite">

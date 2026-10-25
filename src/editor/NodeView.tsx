@@ -1,8 +1,9 @@
 import { memo, useLayoutEffect, useRef } from 'react';
-import { Link2, StickyNote } from 'lucide-react';
+import { Link2, StickyNote, Waypoints } from 'lucide-react';
 import type { Box } from '../layout/layout';
 import type { Marker, Shape } from '../model/schema';
 import { MarkerIcon } from './markers';
+import { parseInternalLink } from './url';
 
 export type EditMode = 'selectAll' | 'end';
 
@@ -19,6 +20,8 @@ export interface NodeViewProps {
   glow?: string;
   marker: Marker | null;
   hasNote: boolean;
+  /** the note, when notes are shown on the map; '' otherwise */
+  visibleNote: string;
   link: string;
   box: Box;
   depth: number;
@@ -37,6 +40,8 @@ export interface NodeViewProps {
   onTextChange: (id: string, text: string) => void;
   onEditEnd: (id: string) => void;
   onOpenDetails: (id: string) => void;
+  /** pointer over (rect) or off (null) the note badge, for the note preview */
+  onNoteHover: (id: string, rect: DOMRect | null) => void;
 }
 
 /** Reads the editable's text, normalising the line breaks browsers insert. */
@@ -62,6 +67,7 @@ export const NodeView = memo(function NodeView(props: NodeViewProps) {
     glow,
     marker,
     hasNote,
+    visibleNote,
     link,
     box,
     depth,
@@ -116,6 +122,7 @@ export const NodeView = memo(function NodeView(props: NodeViewProps) {
     dimmed && 'is-dimmed',
     match !== 'none' && `is-${match === 'current' ? 'current-match' : 'match'}`,
     !text && !editing && 'is-empty',
+    visibleNote && 'has-note-text',
   ]
     .filter(Boolean)
     .join(' ');
@@ -171,8 +178,15 @@ export const NodeView = memo(function NodeView(props: NodeViewProps) {
               type="button"
               className="node__badge"
               aria-label="Show note"
-              title="Show note (⌘I)"
               onPointerDown={(event) => event.stopPropagation()}
+              onPointerEnter={(event) =>
+                props.onNoteHover(id, event.currentTarget.getBoundingClientRect())
+              }
+              onPointerLeave={() => props.onNoteHover(id, null)}
+              onFocus={(event) =>
+                props.onNoteHover(id, event.currentTarget.getBoundingClientRect())
+              }
+              onBlur={() => props.onNoteHover(id, null)}
               onClick={(event) => {
                 event.stopPropagation();
                 props.onOpenDetails(id);
@@ -181,22 +195,38 @@ export const NodeView = memo(function NodeView(props: NodeViewProps) {
               <StickyNote size={13} />
             </button>
           )}
-          {link && (
-            <a
-              className="node__badge"
-              href={link}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Open link ${link}`}
-              title={link}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <Link2 size={13} />
-            </a>
-          )}
+          {link &&
+            (parseInternalLink(link) ? (
+              // a link inside this app: follow it in the same tab
+              <a
+                className="node__badge node__badge--internal"
+                href={link}
+                aria-label={
+                  parseInternalLink(link)!.nodeId ? 'Go to linked node' : 'Go to linked map'
+                }
+                title={parseInternalLink(link)!.nodeId ? 'Go to linked node' : 'Go to linked map'}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Waypoints size={13} />
+              </a>
+            ) : (
+              <a
+                className="node__badge"
+                href={link}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open link ${link}`}
+                title={link}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Link2 size={13} />
+              </a>
+            ))}
         </span>
       )}
+      {visibleNote && !ghost && <div className="node__note">{visibleNote}</div>}
     </div>
   );
 });

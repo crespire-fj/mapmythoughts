@@ -29,12 +29,18 @@
 | --- | --- |
 | **Build fast** | Tab/Enter to add ideas, type to edit, paste an indented list to create whole branches, drag and drop to rearrange, undo everything |
 | **Make meaning visible** | Shapes, colours, status markers (done, in progress, question, idea…), notes and web links on any node |
-| **Connect ideas** | Labelled, dashed cross-links between any two nodes, across branches |
-| **Stay oriented** | Zoom, overview map, find in map, collapse branches, show 1–3 levels, outline view |
+| **Map processes** | Lay any branch out as steps that flow straight down, splitting side by side at decisions; zoom out to 5% to see a whole process |
+| **Connect ideas** | Labelled, dashed cross-links between any two nodes; links from a node to another map or to a node in it; move a big branch to its own map and link to it |
+| **Track what's open** | An Open items panel lists every question, to-do, in-progress and important node, in a map or a whole collection; notes show on hover or on the map |
+| **Stay oriented** | Zoom, overview map, find and replace, collapse branches, show 1–3 levels, outline view |
 | **Focus and present** | Focus on one branch as if it were the whole map; present branch by branch, full screen |
 | **Organise** | Collections (one per project, say), map cards with live thumbnails, templates |
 | **Never lose work** | Saves as you type, works offline and catches up, named and automatic versions you can restore, daily backups |
 | **Share and export** | Send a `.mmt` file to a colleague; export PNG, SVG, PDF, Word or Markdown; import Markdown outlines |
+
+<p align="center">
+  <img src="docs/screenshots/process-steps.png" alt="A course accreditation process laid out as steps that flow downward and split at the committee decision, with the Open items panel listing a question, a to-do, an in-progress step and an important item" width="900">
+</p>
 
 There's a searchable **Guide** inside the app (the _Guide_ button on the start page) that explains
 every feature, and `⌘/` (`Ctrl+/`) in a map shows all keyboard shortcuts.
@@ -131,12 +137,13 @@ On Windows and Linux, use `Ctrl` for `⌘` and `Alt` for `⌥`.
 | ⌘C / ⌘X / ⌘V                 | Copy, cut, paste branches (pasted text becomes branches)   |
 | ⌘D                           | Duplicate branch                                           |
 | Delete or Backspace          | Delete branch                                              |
-| ⌘F                           | Find in map                                                |
+| ⌘F / ⌥⌘F                     | Find in map / find and replace                             |
 | ⌘A, Shift-click, Shift-drag  | Select several nodes                                       |
 | ⌘. / ⌥1, 2, 3, 0             | Collapse a branch / show 1, 2, 3 or all levels             |
 | ⌘I                           | Notes, link and marker for the selected node               |
 | ⌥L                           | Cross-link to another node                                 |
 | ⌥F / ⌥P                      | Focus on a branch / present                                |
+| ⌥S                           | Lay the branch out as steps (on or off)                    |
 | ⌘Z / ⇧⌘Z                     | Undo / redo                                                |
 | ⌘= / ⌘− / ⌘0                 | Zoom in / out / fit                                        |
 

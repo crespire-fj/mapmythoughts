@@ -100,6 +100,26 @@ export function connectorPath(
     : curvedConnector(parent, child, side, orientation);
 }
 
+/**
+ * The connector into a laid-out node. It follows the way the node hangs from its parent, which
+ * inside a steps branch runs across the map's own orientation.
+ */
+export function treeConnector(
+  style: ConnectorStyle,
+  parent: Box,
+  parentShape: string | undefined,
+  child: { box: Box; flow: Orientation; flowSide: Side },
+  childShape: string | undefined,
+): string {
+  return connectorPath(
+    style,
+    attachBox(parent, parentShape, child.flow),
+    attachBox(child.box, childShape, child.flow),
+    child.flowSide,
+    child.flow,
+  );
+}
+
 /** Where the line from a box's centre towards `toward` leaves the box. */
 function boxExit(box: Box, toward: Point): Point {
   const cx = box.x + box.width / 2;

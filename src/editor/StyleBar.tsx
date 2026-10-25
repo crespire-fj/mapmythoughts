@@ -1,4 +1,4 @@
-import { Ban, Focus, NotebookPen, Spline } from 'lucide-react';
+import { Ban, FileOutput, Focus, ListOrdered, NotebookPen, Spline } from 'lucide-react';
 import {
   AUTO_COLOR,
   COLORS,
@@ -20,6 +20,12 @@ interface Props {
   onDetails: () => void;
   onLink: () => void;
   onFocus: () => void;
+  onSteps: () => void;
+  onMoveToMap: () => void;
+  /** one node with children is selected */
+  canMoveToMap: boolean;
+  /** every selected node already sits inside a steps branch, where the setting has no effect */
+  insideSteps: boolean;
   /** two nodes are selected, so the link button links them directly */
   canLinkPair: boolean;
 }
@@ -39,6 +45,7 @@ export function StyleBar(props: Props) {
   const shape = all((n) => n.shape);
   const color = all((n) => n.color);
   const marker = all((n) => n.marker);
+  const steps = nodes.every((n) => n.steps);
 
   return (
     <div className="stylebar" role="toolbar" aria-label="Node style">
@@ -118,6 +125,35 @@ export function StyleBar(props: Props) {
         onClick={props.onFocus}
       >
         <Focus size={16} />
+      </button>
+      <button
+        className={`icon-button${steps ? ' is-active' : ''}`}
+        aria-label="Lay out as steps"
+        aria-pressed={steps}
+        title={
+          props.insideSteps && !steps
+            ? 'Already inside a steps branch'
+            : 'Lay out as steps: the branch flows downward (⌥S)'
+        }
+        disabled={props.insideSteps && !steps}
+        onMouseDown={keepFocus}
+        onClick={props.onSteps}
+      >
+        <ListOrdered size={16} />
+      </button>
+      <button
+        className="icon-button"
+        aria-label="Move branch to a new map"
+        title={
+          props.canMoveToMap
+            ? 'Move this branch to its own map and link to it'
+            : 'Select one node with children to move its branch to a new map'
+        }
+        disabled={!props.canMoveToMap}
+        onMouseDown={keepFocus}
+        onClick={props.onMoveToMap}
+      >
+        <FileOutput size={16} />
       </button>
 
       <button

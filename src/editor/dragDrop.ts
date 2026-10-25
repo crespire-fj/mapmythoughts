@@ -40,11 +40,14 @@ export function resolveDropTarget(
   const parentId = parentKeyOf(snapshot, nodeId);
   const side = parentId === ROOT_ID ? sideAt(layout, point) : undefined;
   const siblings = childrenOf(snapshot, parentId, side).filter((n) => notDragged(n.id));
-  const pointCross = layout.orientation === 'vertical' ? point.x : point.y;
+  // Siblings inside a steps branch sit side by side across the map's own orientation.
+  const flow =
+    siblings.map((n) => layout.nodes.get(n.id)?.flow).find(Boolean) ?? layout.orientation;
+  const pointCross = flow === 'vertical' ? point.x : point.y;
   let index = 0;
   for (const sibling of siblings) {
     const box = layout.nodes.get(sibling.id)?.box;
-    if (box && pointCross > crossCenter(layout, box)) index++;
+    if (box && pointCross > crossCenter(flow, box)) index++;
   }
   return { parentId, side, index };
 }

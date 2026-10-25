@@ -1,5 +1,5 @@
 import fontUrl from '@fontsource-variable/plus-jakarta-sans/files/plus-jakarta-sans-latin-wght-normal.woff2?url';
-import { attachBox, connectorPath, crossLink } from '../connectors/connectors';
+import { crossLink, treeConnector } from '../connectors/connectors';
 import { MARKER_INFO } from '../editor/markers';
 import { boxOf, layoutBounds, type Box, type LayoutResult } from '../layout/layout';
 import { ROOT_ID, type MapSnapshot } from '../model/schema';
@@ -13,6 +13,8 @@ const TYPE = {
   other: { size: 14, line: 20, weight: 500, padX: 14, tracking: 0 },
 };
 const MARKER_SPACE = 22;
+// Keep in sync with .node__note in styles.css.
+const NOTE = { size: 12, line: 17, padX: 8, padY: 6, gap: 6, maxLines: 8 };
 const LINK_COLOR = '#64748b';
 const PADDING = 48;
 
@@ -69,7 +71,11 @@ function radius(shape: string, box: Box): number {
 }
 
 /** A standalone SVG of the whole map, in light mode (collapsed branches stay collapsed). */
-export async function buildSvg(snapshot: MapSnapshot, layout: LayoutResult): Promise<string> {
+export async function buildSvg(
+  snapshot: MapSnapshot,
+  layout: LayoutResult,
+  options: { notes?: boolean } = {},
+): Promise<string> {
   await document.fonts.ready;
   const font = await embeddedFont().catch(() => null);
   const theme = THEMES[snapshot.settings.theme];
@@ -85,12 +91,12 @@ export async function buildSvg(snapshot: MapSnapshot, layout: LayoutResult): Pro
     if (!parent || !data) continue;
     const look = nodeAppearance(data.color, data.shape, node.depth, colors.get(node.id)!, 'light');
     parts.push(
-      `<path d="${connectorPath(
+      `<path d="${treeConnector(
         snapshot.settings.connector,
-        attachBox(parent, snapshot.nodes.get(node.parentId)?.shape, layout.orientation),
-        attachBox(node.box, data.shape, layout.orientation),
-        node.side,
-        layout.orientation,
+        parent,
+        snapshot.nodes.get(node.parentId)?.shape,
+        node,
+        data.shape,
       )}" fill="none" stroke="${look.line}" stroke-width="${look.lineWidth}" stroke-linecap="round"/>`,
     );
   }
@@ -113,6 +119,29 @@ export async function buildSvg(snapshot: MapSnapshot, layout: LayoutResult): Pro
       );
     }
   }
+
+  /** A note drawn under the node's text, as on screen with "Show notes on the map" on. */
+  const drawNote = (box: Box, note: string, padX: number, padY: number): number => {
+    const fontSpec = `500 ${NOTE.size}px ${FONT_FAMILY}`;
+    let lines = wrap(note, fontSpec, box.width - padX * 2 - NOTE.padX * 2);
+    if (lines.length > NOTE.maxLines) {
+      lines = [...lines.slice(0, NOTE.maxLines - 1), `${lines[NOTE.maxLines - 1]}…`];
+    }
+    const height = lines.length * NOTE.line + NOTE.padY * 2;
+    const top = box.y + box.height - padY - height;
+    const left = box.x + padX;
+    const tspans = lines
+      .map(
+        (line, i) =>
+          `<tspan x="${left + NOTE.padX}" y="${top + NOTE.padY + NOTE.line * (i + 0.5)}">${escape(line) || ' '}</tspan>`,
+      )
+      .join('');
+    parts.push(
+      `<rect x="${left}" y="${top}" width="${box.width - padX * 2}" height="${height}" rx="8" fill="#fff6c7"/>`,
+      `<text dominant-baseline="central" font-family="${escape(FONT_FAMILY)}" font-size="${NOTE.size}" font-weight="500" fill="#4a4330">${tspans}</text>`,
+    );
+    return height + NOTE.gap;
+  };
 
   const drawText = (
     box: Box,
@@ -160,17 +189,23 @@ export async function buildSvg(snapshot: MapSnapshot, layout: LayoutResult): Pro
       );
     }
     const type = node.depth <= 1 ? TYPE.first : TYPE.other;
+    // With notes shown, the note fills the bottom of the box and the text sits above it.
+    const below =
+      options.notes && data.note
+        ? drawNote(box, data.note, type.padX, node.depth <= 1 ? 10 : 8)
+        : 0;
+    const textBox = { ...box, height: box.height - below };
     let inset = 0;
     if (data.marker) {
       const info = MARKER_INFO[data.marker];
       const cx = box.x + type.padX + 8;
-      const cy = box.y + box.height / 2;
+      const cy = textBox.y + textBox.height / 2;
       parts.push(
         `<circle cx="${cx}" cy="${cy}" r="8" fill="${info.color}"/><text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-family="${escape(FONT_FAMILY)}" font-size="10" font-weight="700" fill="#ffffff">${escape(info.glyph)}</text>`,
       );
       inset = MARKER_SPACE;
     }
-    drawText(box, data.text, type, look.text, inset);
+    drawText(textBox, data.text, type, look.text, inset);
   }
 
   parts.push(...labels);

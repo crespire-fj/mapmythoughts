@@ -15,11 +15,17 @@ import {
  * Horizontal maps grow left/right; vertical maps are laid out by swapping each node's width and
  * height going in and swapping the axes coming out, so both share one tested algorithm. In a
  * vertical map, side 'right' means below the root and 'left' means above it.
+ *
+ * A node marked `steps` lays out its whole branch as a small top-down tree hanging under it
+ * (across it, in a vertical map): single-child chains run straight on, real branch points split
+ * side by side. The block is sized first and then treated as one unit by the two-sided layout.
  */
 export const H_GAP = 100; // parent edge to child edge, horizontal maps
 export const V_GAP = 64; // parent edge to child edge, vertical maps
 export const SIBLING_GAP = 40;
 export const ROOT_SIBLING_GAP = 60; // between first-level branches
+export const STEP_GAP = 30; // parent edge to child edge inside a steps branch
+export const STEP_SIBLING_GAP = 28; // between siblings inside a steps branch
 
 export interface Size {
   width: number;
@@ -39,6 +45,12 @@ export interface LayoutNode {
   depth: number;
   box: Box;
   parentId: string; // ROOT_ID for first-level nodes
+  /** how this node hangs from its parent: connectors and arrow keys follow it */
+  flow: Orientation;
+  /** which way along `flow` it hangs ('right' is down or right) */
+  flowSide: Side;
+  /** how this node's own children hang: across the map inside a steps branch */
+  childFlow: Orientation;
 }
 
 export interface LayoutResult {
@@ -99,6 +111,11 @@ export function computeLayout(
   const subtreeSpan = (id: string, trail: Set<string>): number => {
     const cached = spans.get(id);
     if (cached !== undefined) return cached;
+    if (isSteps(id)) {
+      const depth = stepDepth(id, new Set());
+      spans.set(id, depth);
+      return depth;
+    }
     const own = sizeOf(id).height;
     if (trail.has(id)) return own; // defensive: a cycle in corrupt data must not hang the app
     trail.add(id);
@@ -115,8 +132,78 @@ export function computeLayout(
     return span;
   };
 
+  // ----- steps branches, in the same main/cross terms: a steps block grows along the cross axis.
+  const across: Orientation = vertical ? 'horizontal' : 'vertical';
+  const isSteps = (id: string) => !!snapshot.nodes.get(id)?.steps && visibleChildren(id).length > 0;
+  /** Width of a steps subtree along the main axis (its siblings sit side by side). */
+  const stepWidths = new Map<string, number>();
+  const stepWidth = (id: string, trail: Set<string>): number => {
+    const cached = stepWidths.get(id);
+    if (cached !== undefined) return cached;
+    const own = sizeOf(id).width;
+    if (trail.has(id)) return own;
+    trail.add(id);
+    const kids = visibleChildren(id);
+    const total =
+      kids.reduce((sum, kid) => sum + stepWidth(kid, trail), 0) +
+      STEP_SIBLING_GAP * Math.max(0, kids.length - 1);
+    trail.delete(id);
+    const width = Math.max(own, total);
+    stepWidths.set(id, width);
+    return width;
+  };
+  /** Depth of a steps subtree along the cross axis, including the node itself. */
+  const stepDepths = new Map<string, number>();
+  const stepDepth = (id: string, trail: Set<string>): number => {
+    const cached = stepDepths.get(id);
+    if (cached !== undefined) return cached;
+    const own = sizeOf(id).height;
+    if (trail.has(id)) return own;
+    trail.add(id);
+    const kids = visibleChildren(id);
+    const below = kids.length ? STEP_GAP + Math.max(...kids.map((k) => stepDepth(k, trail))) : 0;
+    trail.delete(id);
+    stepDepths.set(id, own + below);
+    return own + below;
+  };
+
   const rootSize = sizeOf(ROOT_ID);
   const nodes = new Map<string, LayoutNode>();
+
+  /** Places the children of a steps node in a row below it, each centred over its own subtree. */
+  const placeSteps = (
+    ids: string[],
+    parentId: string,
+    parentMain: number,
+    parentBottom: number,
+    side: Side,
+    depth: number,
+  ) => {
+    if (!ids.length) return;
+    const total =
+      ids.reduce((sum, id) => sum + stepWidth(id, new Set()), 0) +
+      STEP_SIBLING_GAP * (ids.length - 1);
+    let start = parentMain - total / 2;
+    for (const id of ids) {
+      if (nodes.has(id)) continue;
+      const size = sizeOf(id);
+      const width = stepWidth(id, new Set());
+      const main = start + width / 2;
+      const top = parentBottom + STEP_GAP;
+      nodes.set(id, {
+        id,
+        side,
+        depth,
+        parentId,
+        flow: across,
+        flowSide: 'right',
+        childFlow: across,
+        box: { x: main - size.width / 2, y: top, ...size },
+      });
+      placeSteps(visibleChildren(id), id, main, top + size.height, side, depth + 1);
+      start += width + STEP_SIBLING_GAP;
+    }
+  };
 
   const place = (
     ids: string[],
@@ -137,6 +224,24 @@ export function computeLayout(
       if (nodes.has(id)) continue;
       const size = sizeOf(id);
       const span = subtreeSpan(id, new Set());
+      if (isSteps(id)) {
+        // The block's near edge sits where a plain child's would; the node tops its block.
+        const width = stepWidth(id, new Set());
+        const main = parentMain + dir * (parentHalf + mainGap + width / 2);
+        nodes.set(id, {
+          id,
+          side,
+          depth,
+          parentId,
+          flow: orientation,
+          flowSide: side,
+          childFlow: across,
+          box: { x: main - size.width / 2, y: start, ...size },
+        });
+        placeSteps(visibleChildren(id), id, main, start + size.height, side, depth + 1);
+        start += span + gap;
+        continue;
+      }
       const main = parentMain + dir * (parentHalf + mainGap + size.width / 2);
       const cross = start + span / 2;
       nodes.set(id, {
@@ -144,6 +249,9 @@ export function computeLayout(
         side,
         depth,
         parentId,
+        flow: orientation,
+        flowSide: side,
+        childFlow: orientation,
         box: { x: main - size.width / 2, y: cross - size.height / 2, ...size },
       });
       place(visibleChildren(id), id, main, cross, size.width / 2, SIBLING_GAP, side, depth + 1);
@@ -195,9 +303,9 @@ export function intersects(a: Box, b: Box): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
-/** Position along the sibling-stacking axis (y in horizontal maps, x in vertical ones). */
-export function crossCenter(layout: LayoutResult, box: Box): number {
-  return layout.orientation === 'vertical' ? box.x + box.width / 2 : box.y + box.height / 2;
+/** Position along the sibling-stacking axis of nodes that hang in `flow` (y for horizontal). */
+export function crossCenter(flow: Orientation, box: Box): number {
+  return flow === 'vertical' ? box.x + box.width / 2 : box.y + box.height / 2;
 }
 
 /** Which side of the root a point is on. */

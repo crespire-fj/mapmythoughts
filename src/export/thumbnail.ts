@@ -1,4 +1,4 @@
-import { attachBox, connectorPath } from '../connectors/connectors';
+import { treeConnector } from '../connectors/connectors';
 import { layoutBounds, type LayoutResult } from '../layout/layout';
 import { ROOT_ID, type MapSnapshot } from '../model/schema';
 import { THEMES, branchColors, nodeAppearance } from '../theme/themes';
@@ -27,13 +27,7 @@ export function buildThumbnail(snapshot: MapSnapshot, layout: LayoutResult): str
     const parent = node.parentId === ROOT_ID ? layout.root : layout.nodes.get(node.parentId)?.box;
     if (!data || !parent) continue;
     const parentShape = snapshot.nodes.get(node.parentId)?.shape;
-    const d = connectorPath(
-      snapshot.settings.connector,
-      attachBox(parent, parentShape, layout.orientation),
-      attachBox(node.box, data.shape, layout.orientation),
-      node.side,
-      layout.orientation,
-    );
+    const d = treeConnector(snapshot.settings.connector, parent, parentShape, node, data.shape);
     const width = (node.depth <= 1 ? 3.5 : node.depth === 2 ? 2.5 : 2) * (stroke / 1.2);
     parts.push(
       `<path d="${d}" fill="none" stroke="${colors.get(node.id)}" stroke-width="${width.toFixed(1)}" stroke-linecap="round"/>`,

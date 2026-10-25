@@ -7,7 +7,8 @@ export interface Viewport {
   scale: number;
 }
 
-export const MIN_SCALE = 0.15;
+// Low enough to see a whole long process map at once.
+export const MIN_SCALE = 0.05;
 export const MAX_SCALE = 3;
 
 export function clampScale(scale: number): number {

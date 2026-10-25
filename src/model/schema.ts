@@ -84,6 +84,8 @@ export interface NodeSnapshot {
   note: string;
   link: string;
   marker: Marker | null;
+  /** lay this node's branch out as steps flowing down (or across, in a top-and-bottom map) */
+  steps: boolean;
 }
 
 /** A cross-link: a labelled line between any two nodes, outside the tree. */
@@ -161,6 +163,7 @@ function readNode(id: string, map: Y.Map<unknown>): NodeSnapshot {
     note: note instanceof Y.Text ? note.toString() : '',
     link: (map.get('link') as string | undefined) ?? '',
     marker: MARKERS.includes(marker) ? marker : null,
+    steps: map.get('steps') === true,
   };
 }
 

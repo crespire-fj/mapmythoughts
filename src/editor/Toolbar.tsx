@@ -3,6 +3,7 @@ import {
   Download,
   History,
   Keyboard,
+  ListTodo,
   ListTree,
   Monitor,
   Moon,
@@ -22,7 +23,7 @@ import { Menu, MenuItem, MenuSection, keepFocus } from '../ui/Menu';
 import type { SaveStatus } from './useMapDocument';
 
 export type ExportFormat = 'png' | 'svg' | 'pdf' | 'docx' | 'md' | 'mapfile';
-export type SidePanel = 'outline' | 'details' | 'history';
+export type SidePanel = 'outline' | 'details' | 'history' | 'open';
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   loading: 'Opening…',
@@ -44,6 +45,10 @@ interface Props {
   canUndo: boolean;
   canRedo: boolean;
   panels: ReadonlySet<SidePanel>;
+  /** nodes marked as a question, to do, in progress or important */
+  openCount: number;
+  notesOnMap: boolean;
+  onNotesOnMap: () => void;
   colorPreference: ColorPreference;
   onBack: () => void;
   onUndo: () => void;
@@ -64,6 +69,7 @@ function ToolButton(props: {
   onClick: () => void;
   disabled?: boolean;
   pressed?: boolean;
+  badge?: number;
   children: React.ReactNode;
 }) {
   return (
@@ -78,6 +84,11 @@ function ToolButton(props: {
       onClick={props.onClick}
     >
       {props.children}
+      {!!props.badge && (
+        <span className="tool__badge" aria-hidden="true">
+          {props.badge > 99 ? '99+' : props.badge}
+        </span>
+      )}
     </button>
   );
 }
@@ -170,6 +181,17 @@ export function Toolbar(props: Props) {
                   Elbow
                 </MenuItem>
               </MenuSection>
+              <MenuSection title="View">
+                <MenuItem
+                  checked={props.notesOnMap}
+                  onSelect={() => {
+                    props.onNotesOnMap();
+                    close();
+                  }}
+                >
+                  Show notes on the map
+                </MenuItem>
+              </MenuSection>
               <MenuSection title="Show levels">
                 {[1, 2, 3].map((level) => (
                   <MenuItem
@@ -244,6 +266,14 @@ export function Toolbar(props: Props) {
           onClick={() => props.onPanel('details')}
         >
           <NotebookPen size={18} />
+        </ToolButton>
+        <ToolButton
+          label={`Open items${props.openCount ? ` (${props.openCount})` : ''}`}
+          pressed={props.panels.has('open')}
+          badge={props.openCount}
+          onClick={() => props.onPanel('open')}
+        >
+          <ListTodo size={18} />
         </ToolButton>
         <ToolButton
           label="History"
