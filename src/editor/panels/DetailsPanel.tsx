@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { ExternalLink, X } from 'lucide-react';
+import { Copy, ExternalLink, Waypoints, X } from 'lucide-react';
 import { MARKERS, ROOT_ID, type Marker, type NodeSnapshot } from '../../model/schema';
 import { MARKER_INFO, MarkerIcon } from '../markers';
-import { safeUrl } from '../url';
+import { internalLink, parseInternalLink, safeUrl } from '../url';
 
 interface Props {
   nodeId: string;
   node: NodeSnapshot | null; // null for the root
   title: string;
   count: number;
+  /** this map, and the other maps a node can link to */
+  mapId: string;
+  maps: { id: string; title: string }[];
+  onCopyLink: () => void;
   onText: (text: string) => void;
   onNote: (note: string) => void;
   onLink: (link: string) => void;
@@ -44,6 +48,38 @@ function SyncedTextarea({
       onBlur={onEditSession}
       {...rest}
     />
+  );
+}
+
+/** Where an in-app link goes, with a way to follow it. */
+function LinkTarget({
+  link,
+  mapId,
+  maps,
+}: {
+  link: string;
+  mapId: string;
+  maps: { id: string; title: string }[];
+}) {
+  const target = parseInternalLink(link);
+  if (!target) return null;
+  const map = target.mapId === mapId ? null : maps.find((m) => m.id === target.mapId);
+  const name =
+    target.mapId === mapId
+      ? 'a node in this map'
+      : map
+        ? `${target.nodeId ? 'a node in ' : ''}“${map.title.replace(/\s+/g, ' ') || 'Untitled map'}”`
+        : 'a map that no longer exists';
+  return (
+    <p className="link-target">
+      <Waypoints size={14} aria-hidden="true" />
+      <span>Goes to {name}</span>
+      {(map || target.mapId === mapId) && (
+        <a className="link-target__go" href={link}>
+          Go
+        </a>
+      )}
+    </p>
   );
 }
 
@@ -91,6 +127,13 @@ export function DetailsPanel(props: Props) {
               onEditSession={props.onEditSession}
             />
           </label>
+          <button
+            type="button"
+            className="button button--ghost panel__copy"
+            onClick={props.onCopyLink}
+          >
+            <Copy size={15} /> {isRoot ? 'Copy link to this map' : 'Copy link to this node'}
+          </button>
           {!isRoot && node && (
             <>
               <label className="field">
@@ -112,9 +155,9 @@ export function DetailsPanel(props: Props) {
                   <input
                     id={`link-${nodeId}`}
                     className={`field__input${linkError ? ' is-invalid' : ''}`}
-                    type="url"
+                    type="text"
                     inputMode="url"
-                    placeholder="https://…"
+                    placeholder="https://… or a copied map link"
                     value={linkDraft}
                     aria-invalid={linkError}
                     onChange={(event) => setLinkDraft(event.target.value)}
@@ -123,7 +166,7 @@ export function DetailsPanel(props: Props) {
                       if (event.key === 'Enter') commitLink();
                     }}
                   />
-                  {node.link && (
+                  {node.link && !parseInternalLink(node.link) && (
                     <a
                       className="icon-button"
                       href={node.link}
@@ -136,7 +179,29 @@ export function DetailsPanel(props: Props) {
                     </a>
                   )}
                 </div>
-                {linkError && <span className="field__error">Enter a web or email address.</span>}
+                {linkError && (
+                  <span className="field__error">
+                    Enter a web or email address, or a link copied from a map.
+                  </span>
+                )}
+                <LinkTarget link={node.link} mapId={props.mapId} maps={props.maps} />
+                <select
+                  className="field__input field__select"
+                  aria-label="Link to another map"
+                  value=""
+                  onChange={(event) => {
+                    if (event.target.value) props.onLink(internalLink(event.target.value));
+                  }}
+                >
+                  <option value="">Link to another map…</option>
+                  {props.maps
+                    .filter((m) => m.id !== props.mapId)
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.title.replace(/\s+/g, ' ') || 'Untitled map'}
+                      </option>
+                    ))}
+                </select>
               </div>
               <div className="field">
                 <span className="field__label">Marker</span>

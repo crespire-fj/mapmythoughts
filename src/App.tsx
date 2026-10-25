@@ -4,8 +4,8 @@ import { Guide } from './guide/Guide';
 import { Home } from './maps/Home';
 import type { HomeView } from './maps/Sidebar';
 
-// Hash routes: #/ all maps, #/unsorted, #/collection/<id>, #/map/<id> for the editor,
-// #/guide or #/guide/<section> for the feature guide.
+// Hash routes: #/ all maps, #/unsorted, #/collection/<id>, #/map/<id> for the editor (with
+// /node/<nodeId> to jump to one node), #/guide or #/guide/<section> for the feature guide.
 const subscribe = (callback: () => void) => {
   window.addEventListener('hashchange', callback);
   return () => window.removeEventListener('hashchange', callback);
@@ -25,7 +25,8 @@ function viewFrom(hash: string): HomeView {
 
 export function App() {
   const hash = useSyncExternalStore(subscribe, getHash);
-  const mapId = /^#\/map\/([\w-]+)$/.exec(hash)?.[1];
+  const mapRoute = /^#\/map\/([\w-]+)(?:\/node\/([\w-]+))?$/.exec(hash);
+  const mapId = mapRoute?.[1];
   const guide = /^#\/guide(?:\/([\w-]+))?$/.exec(hash);
 
   if (guide) {
@@ -36,6 +37,7 @@ export function App() {
     return (
       <MapEditorPage
         mapId={mapId}
+        nodeId={mapRoute?.[2] ?? null}
         onExit={(collectionId) =>
           (window.location.hash = hashFor(
             collectionId ? { kind: 'collection', id: collectionId } : { kind: 'all' },

@@ -51,6 +51,7 @@ export interface OutlineNode {
   shape?: Shape;
   color?: string;
   collapsed?: boolean;
+  steps?: boolean;
 }
 
 function keyBetween(a: string | null, b: string | null): string {
@@ -77,6 +78,7 @@ interface NodeFields {
   link?: string;
   marker?: Marker | null;
   collapsed?: boolean;
+  steps?: boolean;
 }
 
 function insertNode(doc: Y.Doc, fields: NodeFields): string {
@@ -92,6 +94,7 @@ function insertNode(doc: Y.Doc, fields: NodeFields): string {
   if (fields.note) map.set('note', new Y.Text(fields.note));
   if (fields.link) map.set('link', fields.link);
   if (fields.marker) map.set('marker', fields.marker);
+  if (fields.steps) map.set('steps', true);
   getNodes(doc).set(id, map);
   return id;
 }
@@ -188,6 +191,7 @@ function writeTree(
       link: item.link,
       marker: item.marker ?? null,
       collapsed: item.collapsed && item.children.length > 0,
+      steps: item.steps,
     });
     writeTree(
       doc,
@@ -269,6 +273,7 @@ export function serializeSubtrees(snapshot: MapSnapshot, ids: Iterable<string>):
       shape: node.shape,
       color: node.color,
       collapsed: node.collapsed,
+      steps: node.steps || undefined,
       children: (snapshot.children.get(id) ?? []).map(toOutline),
     };
   };
@@ -498,6 +503,142 @@ export function revealNode(doc: Y.Doc, nodeId: string, undoable = true): boolean
   return changed;
 }
 
+// ----- find and replace ----------------------------------------------------------------------
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** How many times `find` occurs (ignoring case) in the title, node text and notes. */
+export function countOccurrences(snapshot: MapSnapshot, find: string): number {
+  if (!find) return 0;
+  const pattern = new RegExp(escapeRegExp(find), 'gi');
+  let count = (snapshot.title.match(pattern) ?? []).length;
+  for (const node of snapshot.nodes.values()) {
+    count += (node.text.match(pattern) ?? []).length + (node.note.match(pattern) ?? []).length;
+  }
+  return count;
+}
+
+/**
+ * Replaces `find` (ignoring case) with `replacement` in the title, node text and notes, or only in
+ * `nodeIds` (ROOT_ID meaning the title). One undo step; returns how many were replaced.
+ */
+export function replaceText(
+  doc: Y.Doc,
+  find: string,
+  replacement: string,
+  nodeIds?: Iterable<string>,
+): number {
+  if (!find) return 0;
+  const pattern = new RegExp(escapeRegExp(find), 'gi');
+  let count = 0;
+  const swap = (target: unknown) => {
+    if (!(target instanceof Y.Text)) return;
+    const before = target.toString();
+    const after = before.replace(pattern, () => {
+      count++;
+      return replacement;
+    });
+    if (after !== before) applyTextDiff(target, after);
+  };
+  transact(doc, () => {
+    const ids = nodeIds ? new Set(nodeIds) : null;
+    if (!ids || ids.has(ROOT_ID)) swap(getTitle(doc));
+    getNodes(doc).forEach((map, id) => {
+      if (ids && !ids.has(id)) return;
+      swap(map.get('text'));
+      swap(map.get('note'));
+    });
+  });
+  return count;
+}
+
+// ----- branches as their own maps ------------------------------------------------------------
+
+/**
+ * A new map made from one branch: the node becomes the central topic and its children the main
+ * branches (alternating sides), with every style, note, link and marker, and the cross-links that
+ * lie wholly inside the branch. A branch that was laid out as steps keeps flowing as steps.
+ */
+export function buildMapFromBranch(
+  snapshot: MapSnapshot,
+  nodeId: string,
+  settings: Partial<MapSettings> = {},
+): Y.Doc {
+  const branch = snapshot.nodes.get(nodeId);
+  if (!branch) throw new Error(`No node ${nodeId}`);
+  const asSteps =
+    branch.steps || ancestorsOf(snapshot, nodeId).some((id) => snapshot.nodes.get(id)?.steps);
+  const doc = new Y.Doc();
+  const ids = new Map<string, string>([[nodeId, ROOT_ID]]);
+  doc.transact(() => {
+    getTitle(doc).insert(0, branch.text);
+    getSettings(doc).set('schemaVersion', SCHEMA_VERSION);
+    for (const [key, value] of Object.entries(settings)) getSettings(doc).set(key, value);
+    const write = (
+      id: string,
+      parentId: string | null,
+      order: string,
+      side: Side,
+      top: boolean,
+    ) => {
+      const node = snapshot.nodes.get(id)!;
+      const kids = snapshot.children.get(id) ?? [];
+      const copy = insertNode(doc, {
+        parentId,
+        order,
+        side,
+        shape: node.shape,
+        color: node.color,
+        text: node.text,
+        note: node.note,
+        link: node.link,
+        marker: node.marker,
+        collapsed: node.collapsed && kids.length > 0,
+        steps: node.steps || (top && asSteps && kids.length > 0),
+      });
+      ids.set(id, copy);
+      const keys = generateNKeysBetween(null, null, kids.length);
+      kids.forEach((kid, i) => write(kid, copy, keys[i]!, side, false));
+    };
+    const first = snapshot.children.get(nodeId) ?? [];
+    const keys = generateNKeysBetween(null, null, first.length);
+    first.forEach((kid, i) => write(kid, null, keys[i]!, i % 2 === 0 ? 'right' : 'left', true));
+    for (const link of snapshot.links) {
+      const from = ids.get(link.from);
+      const to = ids.get(link.to);
+      if (!from || !to || from === to) continue;
+      const copy = new Y.Map<unknown>();
+      copy.set('from', from);
+      copy.set('to', to);
+      copy.set('label', link.label);
+      getLinks(doc).set(crypto.randomUUID(), copy);
+    }
+  });
+  return doc;
+}
+
+/**
+ * After a branch has moved to its own map: removes the node's children (and cross-links that
+ * touch them) and links the node to the new map, as one undo step.
+ */
+export function replaceBranchWithLink(doc: Y.Doc, nodeId: string, link: string): void {
+  transact(doc, () => {
+    const snapshot = readSnapshot(doc);
+    const map = getNodes(doc).get(nodeId);
+    if (!map) return;
+    const doomed = new Set(descendantsOf(snapshot, nodeId));
+    for (const id of doomed) getNodes(doc).delete(id);
+    const links = getLinks(doc);
+    links.forEach((l, id) => {
+      if (doomed.has(l.get('from') as string) || doomed.has(l.get('to') as string))
+        links.delete(id);
+    });
+    map.set('link', link);
+    map.set('collapsed', false);
+    map.delete('steps');
+  });
+}
+
 // ----- content and style ---------------------------------------------------------------------
 
 export function setText(doc: Y.Doc, nodeId: string, text: string): void {
@@ -534,7 +675,7 @@ export function setLink(doc: Y.Doc, nodeId: string, link: string): void {
 export function setStyle(
   doc: Y.Doc,
   nodeIds: string | Iterable<string>,
-  patch: Partial<{ shape: Shape; color: string; marker: Marker | null }>,
+  patch: Partial<{ shape: Shape; color: string; marker: Marker | null; steps: boolean }>,
 ): void {
   const ids = typeof nodeIds === 'string' ? [nodeIds] : [...nodeIds];
   transact(doc, () => {
@@ -546,6 +687,10 @@ export function setStyle(
       if (patch.marker !== undefined) {
         if (patch.marker) map.set('marker', patch.marker);
         else map.delete('marker');
+      }
+      if (patch.steps !== undefined) {
+        if (patch.steps) map.set('steps', true);
+        else map.delete('steps');
       }
     }
   });

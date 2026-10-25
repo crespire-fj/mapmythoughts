@@ -44,15 +44,19 @@ export function navigate(
   fromId: string,
   direction: Direction,
 ): NavigationResult | null {
-  const { axis, sign } = logicalDirection(direction, layout.orientation);
   if (fromId === ROOT_ID) {
+    const { axis, sign } = logicalDirection(direction, layout.orientation);
     if (axis !== 'main') return null;
     const first = childrenOf(snapshot, ROOT_ID, sign > 0 ? 'right' : 'left')[0];
     return first ? { target: first.id } : null;
   }
   const node = snapshot.nodes.get(fromId);
   if (!node) return null;
-  const side = layout.nodes.get(fromId)?.side ?? branchSide(snapshot, fromId);
+  // Keys follow the way this node hangs from its parent, which inside a steps branch runs
+  // across the map: there ↓ goes to the next step and ←/→ move between parallel steps.
+  const laid = layout.nodes.get(fromId);
+  const side = laid?.flowSide ?? branchSide(snapshot, fromId);
+  const { axis, sign } = logicalDirection(direction, laid?.flow ?? layout.orientation);
 
   if (axis === 'main') {
     if (sign !== childSign(side)) return { target: parentKeyOf(snapshot, fromId) };

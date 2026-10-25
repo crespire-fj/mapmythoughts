@@ -118,7 +118,7 @@ test('notes, links and markers in the details panel, exported to Markdown', asyn
   const link = page.getByPlaceholder('https://…');
   await link.fill('javascript:alert(1)');
   await link.press('Enter');
-  await expect(page.getByText('Enter a web or email address.')).toBeVisible();
+  await expect(page.getByText(/Enter a web or email address/)).toBeVisible();
   await link.fill('spc.int');
   await link.press('Enter');
   await page.getByRole('radio', { name: 'Important', exact: true }).click();

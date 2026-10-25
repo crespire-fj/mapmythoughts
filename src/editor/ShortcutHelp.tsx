@@ -21,6 +21,7 @@ export const SHORTCUT_GROUPS: [string, [string, string][]][] = [
     [
       ['Arrow keys', 'Move between nodes'],
       [`${mod}+F`, 'Find in map'],
+      [`${alt}+${mod}+F`, 'Find and replace'],
       [`${mod}+A`, 'Select all nodes'],
       ['Shift-click, Shift-drag', 'Select several nodes'],
       ['Escape', 'Stop editing, then clear the selection'],
@@ -43,6 +44,7 @@ export const SHORTCUT_GROUPS: [string, [string, string][]][] = [
       [`${mod}+.`, 'Collapse or expand the branch'],
       [`${alt}+F`, 'Focus on the branch (Escape to leave)'],
       [`${alt}+P`, 'Present: arrows or Space step, Escape ends'],
+      [`${alt}+S`, 'Lay the branch out as steps (on or off)'],
       [`${alt}+1 / 2 / 3 / 0`, 'Show 1, 2, 3 or all levels'],
       [`${mod}+I`, 'Notes and link'],
       [`${mod}+= / ${mod}+− / ${mod}+0`, 'Zoom in / out / fit'],
